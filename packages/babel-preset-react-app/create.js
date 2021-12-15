@@ -99,7 +99,7 @@ module.exports = function (api, opts, env) {
           runtime: opts.runtime || 'classic',
         },
       ],
-      isTypeScriptEnabled && [require('@babel/preset-typescript').default],
+      isTypeScriptEnabled && [require('@babel/preset-typescript').default, { allowDeclareFields:true }],
     ].filter(Boolean),
     plugins: [
       // Strip flow types before any other transform, emulating the behavior

@@ -65,6 +65,9 @@ const imageInlineSizeLimit = parseInt(
   process.env.IMAGE_INLINE_SIZE_LIMIT || '10000'
 );
 
+const useTsLoader = process.env.REACT_APP_USE_TS_LOADER || false;
+const shouldTypeCheching = process.env.REACT_APP_CHECK_TS || false;
+
 // Check if TypeScript is setup
 const useTypeScript = fs.existsSync(paths.appTsConfig);
 
@@ -185,12 +188,14 @@ module.exports = function (webpackEnv) {
             root: paths.appSrc,
           },
         },
+        (typeof preProcessor === "string" ?
         {
           loader: require.resolve(preProcessor),
           options: {
             sourceMap: true,
           },
         }
+        : preProcessor),
       );
     }
     return loaders;
@@ -238,6 +243,7 @@ module.exports = function (webpackEnv) {
               .replace(/\\/g, '/')
         : isEnvDevelopment &&
           (info => path.resolve(info.absoluteResourcePath).replace(/\\/g, '/')),
+      hashFunction: "xxhash64",
     },
     cache: {
       type: 'filesystem',
@@ -345,6 +351,18 @@ module.exports = function (webpackEnv) {
           babelRuntimeRegenerator,
         ]),
       ],
+      fallback: { // https://webpack.js.org/configuration/resolve/#resolvefallback
+        assert: require.resolve("assert"),
+        buffer: require.resolve("buffer"),
+        crypto: false, // require.resolve("crypto-browserify"),
+        events: require.resolve('events'),
+        fs    : false,
+        path  : require.resolve("path-browserify"),
+        stream: require.resolve("stream-browserify"),
+        url   : require.resolve('url'),
+        util  : require.resolve("util"),
+        zlib  : require.resolve("browserify-zlib"),
+      }
     },
     module: {
       strictExportPresence: true,
@@ -411,10 +429,26 @@ module.exports = function (webpackEnv) {
                 and: [/\.(ts|tsx|js|jsx|md|mdx)$/],
               },
             },
+
+            useTsLoader && ({
+              test: /\.(ts|tsx)$/,
+              include: paths.appSrc,
+              loader: require.resolve("ts-loader"),
+              options: {
+                transpileOnly: true,
+                onlyCompileBundledFiles: true,
+                // compilerOptions: (
+                //   (isEnvDevelopment) ? ({
+                //     "target": "esnext",
+                //     "downlevelIteration": false,
+                //   }) : undefined)
+              },
+            }),
+
             // Process application JS with Babel.
             // The preset includes JSX, Flow, TypeScript, and some ESnext features.
             {
-              test: /\.(js|mjs|jsx|ts|tsx)$/,
+              test: useTsLoader ? /\.(js|mjs|jsx)$/ : /\.(js|mjs|jsx|ts|tsx)$/,
               include: paths.appSrc,
               loader: require.resolve('babel-loader'),
               options: {
@@ -450,6 +484,7 @@ module.exports = function (webpackEnv) {
                 ),
                 // @remove-on-eject-end
                 plugins: [
+                  [require.resolve('@babel/plugin-transform-typescript'),{ allowDeclareFields: true }],
                   isEnvDevelopment &&
                     shouldUseReactRefresh &&
                     require.resolve('react-refresh/babel'),
@@ -584,6 +619,51 @@ module.exports = function (webpackEnv) {
                 'sass-loader'
               ),
             },
+
+            // Opt-in support for LESS (using .scss or .sass extensions).
+            // By default we support LESS Modules with the
+            // extensions .module.less
+            {
+              test: /\.less$/,
+              exclude: /\.module\.less$/,
+              use: getStyleLoaders(
+                {
+                  importLoaders: 3,
+                  sourceMap: isEnvProduction && shouldUseSourceMap,
+                  modules: {
+                    mode: 'icss',
+                  },
+                },
+                { loader: require.resolve("less-loader"), options: {
+                  lessOptions: {javascriptEnabled: true},
+                  sourceMap: isEnvProduction ? shouldUseSourceMap : isEnvDevelopment,
+                } }
+              ),
+              // Don't consider CSS imports dead code even if the
+              // containing package claims to have no side effects.
+              // Remove this when webpack adds a warning or an error for this.
+              // See https://github.com/webpack/webpack/issues/6571
+              sideEffects: true,
+            },
+            // Adds support for CSS Modules, but using LESS
+            // using the extension .module.less
+            {
+              test: /\.module\.less$/,
+              use: getStyleLoaders(
+                {
+                  importLoaders: 3,
+                  sourceMap: isEnvProduction && shouldUseSourceMap,
+                  modules: {
+                    mode: 'local',
+                    getLocalIdent: getCSSModuleLocalIdent,
+                  },
+                },
+                { loader: require.resolve("less-loader"), options: {
+                  lessOptions: {javascriptEnabled: true},
+                  sourceMap: isEnvProduction ? shouldUseSourceMap : isEnvDevelopment,
+                } }),
+            },
+
             // "file" loader makes sure those assets get served by WebpackDevServer.
             // When you `import` an asset, you get its (virtual) filename.
             // In production, they would get copied to the `build` folder.
@@ -599,7 +679,7 @@ module.exports = function (webpackEnv) {
             },
             // ** STOP ** Are you adding a new loader?
             // Make sure to add the new loader(s) before the "file" loader.
-          ],
+          ].filter(Boolean),
         },
       ].filter(Boolean),
     },
@@ -651,6 +731,10 @@ module.exports = function (webpackEnv) {
       // during a production build.
       // Otherwise React will be compiled in the very slow development mode.
       new webpack.DefinePlugin(env.stringified),
+      new webpack.ProvidePlugin({
+        Buffer: ['buffer', 'Buffer'],
+        process: 'process',
+      }),
       // Experimental hot reloading for React .
       // https://github.com/facebook/react/tree/main/packages/react-refresh
       isEnvDevelopment &&
@@ -716,6 +800,7 @@ module.exports = function (webpackEnv) {
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         }),
       // TypeScript type checking
+      shouldTypeCheching &&
       useTypeScript &&
         new ForkTsCheckerWebpackPlugin({
           async: isEnvDevelopment,
